@@ -30,7 +30,7 @@ spec:
 ```
 `$ kubectl apply -f nginx-deploy.yml`
 
-Verify the pods are running
+Verify the pod is running
 
 `$ kubectl get pods`
 
