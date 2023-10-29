@@ -515,3 +515,7 @@ This will terminate the running pod and spin up a new one.
 ![](./Images/nbv.PNG)
 
 The content in the browser remains unchanged despite restarting the deployment, which resulted in the termination of the previous pod and the creation of a new one.
+
+To delete the cluster
+
+`$ eksctl delete cluster --name deploy`
