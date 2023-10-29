@@ -2,7 +2,16 @@
 
 Now, it is important to understand that containers in Kubernetes are designed to be stateless. This means that data doesn't persist within the containers. Even when you deploy containers within Kubernetes pods, they maintain their statelessness unless you specifically configure your environment to support statefulness.
 
+Create a cluster on EKS
 
+```
+eksctl create cluster \
+  --name deploy \
+  --region us-east-1 \
+  --nodegroup-name worker \
+  --node-type t2.micro \
+  --nodes 2
+```
 Create a deployment __deploy.yml__
 
 ```
@@ -80,8 +89,6 @@ we know the AZ for the node is in __us-east-1f__. The volume must be created in 
 Create the EBS Volume
 
 `$ aws ec2 create-volume --availability-zone us-east-1f --size 10 --volume-type gp2`
-
-#####
 
 Tag the volume
 
@@ -201,9 +208,130 @@ Creating a PV manually resembles traditional volume creation through a console. 
 
 For storage systems like NFS, iSCSI, or cloud provider-specific solutions such as AWS's EBS, PVs can be dynamically generated to create volumes for Pods. This requires the presence of a storage class resource within the cluster for PV provisioning.
 
-In Amazon EKS (Elastic Kubernetes Service), a default storage class is pre-configured during installation. This default storage class, based on the gp2 type, utilizes Amazon's solid-state drives (SSDs), making it suitable for a wide range of transactional workloads.
+During the installation of Amazon EKS (Elastic Kubernetes Service), an out-of-the-box storage class is preconfigured. This default storage class utilizing Amazon's solid-state drives (SSDs) of the gp2 type, is designed to accommodate a diverse array of transactional workloads.
+
+Run the command below to check if storageclass is present in the cluster 
+
+`$ kubectl get storageclass`
+
+![](./Images/sc.PNG)
+
+If there is no storage class in your cluster, below manifest is an example of how one would be created
+
+```
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: gp2
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp2
+  fsType: ext4
+```
+A __PersistentVolumeClaim (PVC)__, in contrast, serves as a demand for storage. Just as Pods utilize resources on a node, PVCs tap into the resources offered by Persistent Volumes (PVs). While Pods can make resource requests specifying CPU and memory requirements, Claims can request specific storage size and [__access modes__](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes). These  [__access modes__](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes) modes can be configured as
+- ReadWriteOnce
+- ReadOnlyMany
+- ReadWriteMany
+- ReadWriteOncePod as detailed in the [__AccessModes__](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modesspecification).
+
+__Lifecycle of a PV and PVC__
+
+Persistent Volumes (PVs) represent resources within a cluster, while Persistent Volume Claims (PVCs) serve as requests for these resources and also act as claims to those resources. The interplay between PVs and PVCs follows a specific lifecycle:
+
+__Provisioning:__
+- __Static/Manual Provisioning:__ Cluster administrators manually create PVs using a manifest file that contains all the storage details. PVs are not limited to specific namespaces; they are clusterwide resources and are available for use upon request. In contrast, PVCs are namespace-specific.
+- __Dynamic Provisioning:__ When there is no PV that matches a PVC's request, a dynamic PV is created based on the available StorageClass. If no suitable StorageClass exists, the PVC's request for a PV will fail.
+
+__Binding:__
+- PVCs are exclusively bound to specific PVs in a one-to-one mapping. Claims will remain unbound until a matching volume becomes available. For example, if a cluster has 50Gi PVs and a PVC requests 100Gi, the PVC can only be bound once a 100Gi PV is added to the cluster.
+
+__Using:__
+- Pods use PVCs as volumes. The cluster identifies the bound volume associated with a claim and mounts it for the Pod. Users can specify the desired access mode when using their claim as a volume in a Pod. Once a user has a bound claim, they retain access to the corresponding PV for as long as they need it.
+
+__Storage Object in Use Protection:__
+- This feature ensures that PersistentVolumeClaims (PVCs) actively used by Pods and PersistentVolumes (PVs) bound to PVCs are not removed from the system to prevent data loss. If a PVC is in active use by a Pod, its deletion is postponed until it is no longer actively used. The same applies to PVs bound to PVCs; their removal is delayed until they are no longer bound.
+
+__Reclaiming:__
+- When a user is finished with their volume, they can delete the PVC objects from the API, allowing the resource to be reclaimed. The reclaim policy for a PersistentVolume dictates what happens to the volume after it is released from its claim. Options include:
+- __Retain:__ The volume is manually reclaimed. After a PersistentVolumeClaim is deleted, the PersistentVolume is considered "released" but retains the previous claimant's data.
+- __Delete:__ For volume plugins supporting the Delete reclaim policy, both the PersistentVolume object and the associated external storage asset are removed. Dynamically provisioned volumes inherit the reclaim policy of their StorageClass, typically defaulting to Delete.
+
+__NOTES:__
+- Expanding the size of PVCs is only possible if the storageClass is configured to allow expansion with the __allowVolumeExpansion__ field set to true in the manifest YAML file.
+- PVs provisioned in a specific availability zone can only be used by pods running in that zone. Attempts to use the PV in a different AZ will result in pending state and a volume node affinity conflict message.
+- PVs are clusterwide resources not limited to namespaces, while PVCs are namespace-scoped.
+
+[Click here](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#types-of-persistent-volumes) to see types of persistent volumes.
+
+Now lets create some persistence for our nginx deployment. We will use 2 different approaches.
+
+Approach 1
+
+Create a manifest file for a PVC, and based on the gp2 storageClass a PV will be dynamically created
+
+```
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: nginx-volume-claim
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 2Gi
+      storageClassName: gp2
+```
+
+Create the manifest file
+
+`$ kubectl apply -f pvc.yml`
+
+`$ kubectl describe pvc nginx-volume-claim`
 
 
+If you run `kubectl get pv` you will see that no PV is created yet. The__ waiting for first consumer to be created before binding__ is a configuration setting from the storageClass. See the __VolumeBindingMode__ section below.
+
+![](./Images/ppp.PNG)
+
+To proceed, simply apply the new deployment configuration below.
+
+Then configure the Pod spec to use the PVC
+
+```
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deploy
+  labels:
+    tier: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      tier: frontend
+  template:
+    metadata:
+      labels:
+        tier: frontend
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: nginx-volume-claim
+          mountPath: "/tmp/dybran"
+      volumes:
+      - name: nginx-volume-claim
+        persistentVolumeClaim:
+          claimName: nginx-volume-claim
+```
 
 
+Notice that the volumes section nnow has a __persistentVolumeClaim__. With the new deployment manifest, the __/tmp/dybran__ directory will be persisted, and any data written in there will be sotred permanetly on the volume, which can be used by another Pod if the current one gets replaced.
 
+Now lets check the dynamically created PV
