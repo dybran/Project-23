@@ -19,3 +19,11 @@ spec:
         image: nginx:latest
         ports:
         - containerPort: 80
+        volumeMounts:
+        - name: nginx-volume
+          mountPath: /usr/share/nginx/
+      volumes:
+      - name: nginx-volume
+        awsElasticBlockStore:
+          volumeID: "vol-0b227f92fad1fa1af"
+          fsType: ext4

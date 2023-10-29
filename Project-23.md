@@ -292,9 +292,20 @@ Create the manifest file
 `$ kubectl describe pvc nginx-volume-claim`
 
 
-If you run `kubectl get pv` you will see that no PV is created yet. The__ waiting for first consumer to be created before binding__ is a configuration setting from the storageClass. See the __VolumeBindingMode__ section below.
+Run 
+
+`$ kubectl get pv`
+
+You will see that no PV is created yet. The __waiting for first consumer to be created before binding__ is a configuration setting from the storageClass.
+
+Then run
+
+`$ kubectl get storageclasses.storage.k8s.io gp2`
+
+See the __VolumeBindingMode__ section below.
 
 ![](./Images/ppp.PNG)
+#####
 
 To proceed, simply apply the new deployment configuration below.
 
@@ -330,8 +341,177 @@ spec:
         persistentVolumeClaim:
           claimName: nginx-volume-claim
 ```
+Notice that the volumes section now has a __persistentVolumeClaim__. With the new deployment manifest, the __/tmp/dybran__ directory will be persisted, and any data written in there will be stored permanetly on the volume, which can be used by another Pod if the current one gets replaced.
 
+__CONFIGMAP__
 
-Notice that the volumes section nnow has a __persistentVolumeClaim__. With the new deployment manifest, the __/tmp/dybran__ directory will be persisted, and any data written in there will be sotred permanetly on the volume, which can be used by another Pod if the current one gets replaced.
+ConfigMaps are not intended for data storage but rather serve as a means to manage configuration files, safeguarding them against loss during Pod replacement. 
 
-Now lets check the dynamically created PV
+To illustrate this, I will utilize the HTML file provided with Nginx, which can be located in the `/usr/share/nginx/html/index.html` directory. 
+
+Let's walk through the following steps to demonstrate a use case for ConfigMaps:
+
+- Remove the `volumeMounts` and PVC (Persistent Volume Claim) sections from the manifest.
+- Apply the modified configuration using `kubectl`.
+
+Next, port forward the service to ensure you can access the __"Welcome to Nginx"__ page. 
+
+Finally, execute a command to access the running container and create a copy of the `index.html` file, storing it in a suitable location.
+
+Create a deployment __deploy.yml__ and a service __nginxlb-svc.yml__
+
+`$ kubectl apply -f deploy-pvc.yml` 
+
+`$ kubectl apply -f nginxlb-svc.yml`
+
+`$ kubectl get pods`
+
+Get the loadbalancer endpoint
+
+`$ kubectl get svc`
+
+![](./Images/xnn.PNG)
+![](./Images/xn.PNG)
+
+Connect to the container in the pod and access the __/usr/share/nginx/html/index.html__
+
+`$ kubectl exec -it nginx-deploy-7d476d754d-gmp6f -- /bin/bash`
+
+`$ cat /usr/share/nginx/html/index.html`
+
+![](./Images/nnnn.PNG)
+
+Copy the content to a file.
+
+__Storing Configuration Data Using ConfigMaps__
+
+As per the official documentation on ConfigMaps, a ConfigMap is an API resource designed for the storage of non-sensitive data in the form of key-value pairs. ConfigMaps can be utilized by pods to access configuration data through environment variables, command-line arguments, or as configuration files stored in a volume.
+
+For our specific scenario, we will employ a ConfigMap to generate a file within a volume. The corresponding manifest file will appear as follows
+
+```
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: website-index-file
+data:
+  # file to be mounted inside a volume
+  index-file: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <title>Welcome to nginx!</title>
+    <style>
+    html { color-scheme: light dark; }
+    body { width: 35em; margin: 0 auto;
+    font-family: Tahoma, Verdana, Arial, sans-serif; }
+    </style>
+    </head>
+    <body>
+    <h1>Welcome to nginx!</h1>
+    <p>If you see this page, the nginx web server is successfully installed and
+    working. Further configuration is required.</p>
+
+    <p>For online documentation and support please refer to
+    <a href="http://nginx.org/">nginx.org</a>.<br/>
+    Commercial support is available at
+    <a href="http://nginx.com/">nginx.com</a>.</p>
+
+    <p><em>Thank you for using nginx.</em></p>
+    </body>
+    </html>
+```
+
+Apply the new manifest file
+
+`$ kubectl apply -f nginx-configmap.yaml`
+
+Update the deployment file to use the configmap in the volumeMounts section
+
+```
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    tier: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      tier: frontend
+  template:
+    metadata:
+      labels:
+        tier: frontend
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        volumeMounts:
+          - name: config
+            mountPath: /usr/share/nginx/html
+            readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: website-index-file
+          items:
+          - key: index-file
+            path: index.html
+```
+Run the commant to update the deployment
+
+![](./Images/ccc.PNG)
+
+`$ kubectl apply -f deploy.yml`
+
+![](./Images/ccc1.PNG)
+
+Now the __index.html__ file is no longer ephemeral because it is using a configMap that has been mounted onto the filesystem. This is now evident when you exec into the pod and list the __/usr/share/nginx/html__ directory
+
+`$ ls -ltr  /usr/share/nginx/html`
+
+![](./Images/daa.PNG)
+
+the __index.html__ is now a soft link to __../data__.
+
+Accessing the website will have no immediate impact, as it currently loads the same HTML file from the configuration map. However, if you modify the HTML content within the configuration map and subsequently restart the pod, your changes will be preserved.
+
+You can check the available configuration maps by using either of the following commands
+
+`$ kubectl get configmap` OR `$ kubectl get cm`
+
+![](./Images/web.PNG)
+
+To modify the __ConfigMap__, you have two options: 
+- You can either update the manifest file
+
+OR
+
+- Directly edit the Kubernetes object. In this case, we'll choose the latter approach.
+
+To edit the ConfigMap __web-index-file__ using the default system editor, run the following command:
+
+`$ kubectl edit cm web-index-file`
+
+This command will open a text editor, which is typically configured as Vim or your system's default editor. You can now make the desired changes to the content, focusing on modifying only the HTML data section. After making your changes, save the file.
+
+![](./Images/indx.PNG)
+![](./Images/indx1.PNG)
+
+Without restarting the pod, your site should be loaded automatically.
+
+![](./Images/news.PNG)
+
+If you wish to restart the deployment for any reason, simply use the command
+
+`$ kubectl rollout restart deploy nginx-deploy` 
+
+This will terminate the running pod and spin up a new one.
+
+![](./Images/nbv.PNG)
+
+The content in the browser remains unchanged despite restarting the deployment, which resulted in the termination of the previous pod and the creation of a new one.
