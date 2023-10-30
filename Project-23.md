@@ -519,3 +519,5 @@ The content in the browser remains unchanged despite restarting the deployment, 
 To delete the cluster
 
 `$ eksctl delete cluster --name deploy`
+
+Continue in the next [Project](https://github.com/dybran/Project-24).
